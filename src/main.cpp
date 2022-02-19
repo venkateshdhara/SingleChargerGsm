@@ -9,15 +9,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-
+#include <Http.h>
 
 
 
 #define vCalibration                                                150
 #define currCalibration                                             8
-#define SIM800_RX_PIN                                               8
-#define SIM800_TX_PIN                                               9
-#define SIM800_RST_PIN                                              13
 #define DHTTYPE                                                     DHT11
 #define DHTPIN                                                      12 
 #define RELAY                                                       10
@@ -25,6 +22,10 @@
 #define STOP_BUTTON                                                 5
 #define VADC                                                        A0
 #define FAN_RELAY                                                   0
+#define RST_PIN 13
+#define RX_PIN 9
+#define TX_PIN 8
+
 DHT dht(DHTPIN, DHTTYPE);
 EnergyMonitor emon1;
 LiquidCrystal_I2C lcd(0x27,16,2);  // set the LCD address to 0x27 for a 16 chars and 2 line display
@@ -32,17 +33,21 @@ LiquidCrystal_I2C lcd(0x27,16,2);  // set the LCD address to 0x27 for a 16 chars
 
 
 
+
+const char BEARER[] PROGMEM = "airtelgprs.com";
 const char APN[] = "airtelgprs.com";
 const char URL[] = "http://54.159.4.4:5000/buttonstatus";
 const char CONTENT_TYPE[] = "application/json";
 char httpData[200];
-SIM800L* sim800l;
+
 unsigned long lastmillis = 0,prevtime=0, postLastmill=0;
 bool timerRun = false;            
 int addr = 0, vMin, vMax, rmode, voltage, level, pinData=1, checkFlag, blynkBtn=2;
 float w, kWh;
-
-
+char response[32];
+  char body[90];
+  Result result;
+ HTTP http(9600, RX_PIN, TX_PIN, RST_PIN);
 
 void setupModule();
 int getChargerStatus(void);
@@ -58,7 +63,6 @@ void setup() {
   pinMode(STOP_BUTTON, INPUT);
   pinMode(RELAY, OUTPUT);
   pinMode (FAN_RELAY,OUTPUT);
-  pinMode(SIM800_RST_PIN,OUTPUT);
   dht.begin();
   if(digitalRead(START_BUTTON) == 1){
     EEPROM.write(addr,1);
@@ -70,19 +74,10 @@ void setup() {
   lcd.init();
   lcd.backlight();
   Serial.begin(115200);
-  Serial.println("Void setup complete!!!");
   lcd.setCursor(0,0);
   checkFlag = EEPROM.read(addr);
-  SoftwareSerial* serial = new SoftwareSerial(SIM800_RX_PIN, SIM800_TX_PIN);
-  serial->begin(9600);
-  sim800l = new SIM800L((Stream *)serial, SIM800_RST_PIN, 200, 512);
-  // sim800l = new SIM800L((Stream *)serial, SIM800_RST_PIN, 200, 512, (Stream *)&Serial);
-  setupModule();
-  bool connected = false;
-  for(uint8_t i = 0; i < 5 && !connected; i++) {
-    delay(1000);
-    connected = sim800l->connectGPRS();
-  }
+  
+  
   lcd.clear();
   lcd.setCursor(5,0);
   lcd.print("HITECH");
@@ -93,11 +88,19 @@ void setup() {
   chargerOff();
   emon1.voltage(1, vCalibration, 1.7);    
   emon1.current(3, currCalibration);
-    
+  result = http.connect(BEARER);
+  Serial.print(F("HTTP connect: "));
+  Serial.println(result);
+  
+  Serial.println("Void setup complete!!!");
 }
  
 void loop() {
+ 
+ 
  blynkBtn =getChargerStatus();
+ Serial.print("Get val:");
+ Serial.println(blynkBtn);
  readChamberTemperature();
  int inpuValue = analogRead(VADC);
 
@@ -159,70 +162,11 @@ lcd.print("CHARGER-OFF");
 
  delay(1000);
 }
-/********************************************************************************************************************************************/
-void setupModule() {
-    // Wait until the module is ready to accept AT commands
-  while(!sim800l->isReady()) {
-    Serial.println(F("Problem to initialize AT command, retry in 1 sec"));
-    delay(1000);
-  }
-  Serial.println(F("Setup Complete!"));
- 
-  // Wait for the GSM signal
-  uint8_t signal = sim800l->getSignal();
-  while(signal != 0) {
-    delay(1000);
-    signal = sim800l->getSignal();
-  }
-  Serial.print(F("Signal OK (strenght: "));
-  Serial.print(signal);
-  Serial.println(F(")"));
-  delay(10);
 
-
-  // Wait for operator network registration (national or roaming network)
-  NetworkRegistration network = sim800l->getRegistrationStatus();
-  while(network != REGISTERED_HOME && network != REGISTERED_ROAMING) {
-    delay(1000);
-    network = sim800l->getRegistrationStatus();
-  }
-  Serial.println(F("Network registration OK"));
-  
-  delay(1000);
-
-  // Setup APN for GPRS configuration
-  bool success = sim800l->setupGPRS(APN);
-  while(!success) {
-    success = sim800l->setupGPRS(APN);
-    delay(5000);
-  }
-  Serial.println(F("GPRS config OK"));
- 
-}
 /*******************************************************************************************************************************************/
 int getChargerStatus(void){
-  Serial.println(F("Start HTTP GET..."));
-
-  // Do HTTP GET communication with 10s for the timeout (read)
-  uint16_t rc = sim800l->doGet(URL, 10000);
-   if(rc == 200) {
-    // Success, output the data received on the serial
-    memcpy(httpData,sim800l->getDataReceived(), sim800l->getDataSizeReceived()); 
-//     Serial.println(sim800l->getDataReceived());  
-  } else {
-    // Failed...
-    
-    Serial.print(F("HTTP GET error "));
-    Serial.println(sim800l->getDataReceived());
-    Serial.println(rc);
-    sim800l->reset();
-    setupModule();
-    bool connected = false;
-    for(uint8_t i = 0; i < 5 && !connected; i++) {
-    delay(1000);
-    connected = sim800l->connectGPRS();
-    }
-  }
+ result = http.get("http://54.159.4.4:5000/buttonstatus", response);
+ memcpy(httpData,response,strlen(response));
   int switcher = atoi(&httpData[18]);
   if (switcher == 1){
     Serial.println("LED on");
@@ -329,11 +273,14 @@ float readChamberTemperature(void){
 }
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------*/
 void postdata(int voltage, int level){
-  // char PAYLOAD[100];
-  //  char URLP[] = "http://54.159.4.4:5000/chargerhealth";
-  //  char CONTENT_TYPE[] = "application/json";
-  // char PAYLOAD[] = "{\"voltage\": 60, \"level\": 98}";
-  // Serial.println(PAYLOAD);
-  // uint16_t rc = sim800l->doPost(URLP, CONTENT_TYPE, PAYLOAD, 512, 512);
+ sprintf(body, "{\"level\": %d, \"voltage\": %d }", level, voltage);
+  result = http.post("http://54.159.4.4:5000/chargerhealth", body, response);
+  Serial.print(F("HTTP POST: "));
+  Serial.println(result);
+  if (result == SUCCESS)
+  {
+    Serial.println(response);
+    
+  }
 }
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------*/
