@@ -10,9 +10,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <Http.h>
-
-
-
+/*--------------------------------------------------------------------MACROS----------------------------------------------------------------------------------*/
 #define vCalibration                                                150
 #define currCalibration                                             8
 #define DHTTYPE                                                     DHT11
@@ -22,33 +20,32 @@
 #define STOP_BUTTON                                                 5
 #define VADC                                                        A0
 #define FAN_RELAY                                                   0
-#define RST_PIN 13
-#define RX_PIN 9
-#define TX_PIN 8
+#define RST_PIN                                                     13
+#define RX_PIN                                                      9
+#define TX_PIN                                                      8
 
+/*---------------------------------------------------------INSTANCES-----------------------------------------------------------------------------------------*/
 DHT dht(DHTPIN, DHTTYPE);
 EnergyMonitor emon1;
 LiquidCrystal_I2C lcd(0x27,16,2);  // set the LCD address to 0x27 for a 16 chars and 2 line display
 
-
-
-
-
+/*--------------------------------------------------------VARIABLES-------------------------------------------------------------------------------------------*/
 const char BEARER[] PROGMEM = "airtelgprs.com";
 const char APN[] = "airtelgprs.com";
-const char URL[] = "http://54.159.4.4:5000/buttonstatus";
+const char URL[] = "http://54.159.4.4:5000/000001/buttonstatus";
+const char URLP[] ="http://54.159.4.4:5000/000001/chargerhealth";
 const char CONTENT_TYPE[] = "application/json";
 char httpData[200];
-
 unsigned long lastmillis = 0,prevtime=0, postLastmill=0;
 bool timerRun = false;            
-int addr = 0, vMin, vMax, rmode, voltage, level, pinData=1, checkFlag, blynkBtn=2;
+int addr = 0, vMin, vMax, rmode, voltage, level, pinData=1, blynkUseFlag, blynkBtn=2, prevState=2;
 float w, kWh;
 char response[32];
-  char body[90];
-  Result result;
- HTTP http(9600, RX_PIN, TX_PIN, RST_PIN);
+char body[90];
+Result result;
+HTTP http(9600, RX_PIN, TX_PIN, RST_PIN);
 
+/*---------------------------------------------------------FUNCTION DECLARATIONS-----------------------------------------------------------------------------*/
 void setupModule();
 int getChargerStatus(void);
 void chargerOff(void);
@@ -57,7 +54,7 @@ void updateVA(void);
 void myTimerEvent(void);
 float readChamberTemperature(void);
 void postdata(int voltage, int level);
-
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 void setup() {  
   pinMode(START_BUTTON, INPUT);
   pinMode(STOP_BUTTON, INPUT);
@@ -75,9 +72,7 @@ void setup() {
   lcd.backlight();
   Serial.begin(115200);
   lcd.setCursor(0,0);
-  checkFlag = EEPROM.read(addr);
-  
-  
+  blynkUseFlag = EEPROM.read(addr);
   lcd.clear();
   lcd.setCursor(5,0);
   lcd.print("HITECH");
@@ -88,19 +83,39 @@ void setup() {
   chargerOff();
   emon1.voltage(1, vCalibration, 1.7);    
   emon1.current(3, currCalibration);
+   blynkUseFlag=1;
+  if(blynkUseFlag == true){
+    lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Connecting GPRS...");
   result = http.connect(BEARER);
   Serial.print(F("HTTP connect: "));
   Serial.println(result);
+   lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("GPRS Connected");
+
+}
   
   Serial.println("Void setup complete!!!");
+ 
 }
  
 void loop() {
  
- 
+ if(blynkUseFlag == true){
  blynkBtn =getChargerStatus();
  Serial.print("Get val:");
  Serial.println(blynkBtn);
+ }
+
+ if(blynkUseFlag == false){
+   if(digitalRead(START_BUTTON) == HIGH)
+    blynkBtn =1;
+   else if(digitalRead(STOP_BUTTON) == HIGH)
+    blynkBtn =0;
+ }
+
  readChamberTemperature();
  int inpuValue = analogRead(VADC);
 
@@ -123,8 +138,9 @@ void loop() {
   if(level < 0)
   level = 0;
 
-
- if(blynkBtn ==1) {
+if(prevState != blynkBtn){
+ if(blynkBtn == 1) {
+   prevState =1;
     blynkBtn=2;
     #if (DEBUG ==1)
     Serial.println("on");
@@ -133,48 +149,46 @@ void loop() {
     timerRun = true;
     prevtime=millis(); lastmillis=millis();
   }
-    if(blynkBtn ==0){
+    if(blynkBtn == 0){
+      prevState =0;
     blynkBtn=2;
-    #if (DEBUG ==1)
+    #if (DEBUG == 1)
   Serial.println("off");
   #endif
   chargerOff();
   timerRun = false;
-float power= kWh;
-lcd.clear();
-lcd.setCursor(0,0);
-lcd.print("Power consu:");
-lcd.print(kWh,3);
-kWh=0;
+  float power= kWh;
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Power consu:");
+  lcd.print(kWh,3);
+  kWh=0;
 
-prevtime=0; lastmillis=0;
-delay(10000);
-lcd.clear();
-lcd.setCursor(0,0);
-lcd.print("                ");
-lcd.setCursor(2,0);
-lcd.print("CHARGER-OFF");
-
+  prevtime=0; lastmillis=0;
+  delay(10000);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("                ");
+  lcd.setCursor(2,0);
+  lcd.print("CHARGER-OFF");
 //while(digitalRead(STOP_BUTTON) == HIGH );
   }
-
-    postdata(voltage,level);
-
- delay(1000);
+}
+if(blynkUseFlag == true){
+postdata(voltage,level);
+}
 }
 
 /*******************************************************************************************************************************************/
 int getChargerStatus(void){
- result = http.get("http://54.159.4.4:5000/buttonstatus", response);
+ result = http.get(URL, response);
  memcpy(httpData,response,strlen(response));
   int switcher = atoi(&httpData[18]);
   if (switcher == 1){
     Serial.println("LED on");
-
   }
   else if(switcher == 0){
     Serial.println("LED off");
-    
   }
 return switcher;
 }
@@ -274,7 +288,7 @@ float readChamberTemperature(void){
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------*/
 void postdata(int voltage, int level){
  sprintf(body, "{\"level\": %d, \"voltage\": %d }", level, voltage);
-  result = http.post("http://54.159.4.4:5000/chargerhealth", body, response);
+  result = http.post(URLP, body, response);
   Serial.print(F("HTTP POST: "));
   Serial.println(result);
   if (result == SUCCESS)
