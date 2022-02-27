@@ -31,15 +31,14 @@ LiquidCrystal_I2C lcd(0x27,16,2);  // set the LCD address to 0x27 for a 16 chars
 
 /*--------------------------------------------------------VARIABLES-------------------------------------------------------------------------------------------*/
 const char BEARER[] PROGMEM = "airtelgprs.com";
-const char APN[] = "airtelgprs.com";
-const char URL[] = "http://54.159.4.4:5000/000001/buttonstatus";
-const char URLP[] ="http://54.159.4.4:5000/000001/chargerhealth";
+const char URL[] = "http://54.159.4.4:5000/000003/buttonstatus";
+const char URLP[] ="http://54.159.4.4:5000/000003/chargerhealth";
 const char CONTENT_TYPE[] = "application/json";
 char httpData[200];
 unsigned long lastmillis = 0,prevtime=0, postLastmill=0;
-bool timerRun = false;            
-int addr = 0, vMin, vMax, rmode, voltage, level, pinData=1, blynkUseFlag, blynkBtn=2, prevState=2;
-float w, kWh;
+bool timerRun = false, chargerState=false;            
+int addr = 0, rmode, level, pinData=1, blynkUseFlag, blynkBtn=2, prevState=2;
+float w, kWh,vMin, vMax, voltage;
 char response[32];
 char body[90];
 Result result;
@@ -48,12 +47,13 @@ HTTP http(9600, RX_PIN, TX_PIN, RST_PIN);
 /*---------------------------------------------------------FUNCTION DECLARATIONS-----------------------------------------------------------------------------*/
 void setupModule();
 int getChargerStatus(void);
+float mapf(float x, float in_min, float in_max, float out_min, float out_max); 
 void chargerOff(void);
 void chargerOn(void);
 void updateVA(void);
 void myTimerEvent(void);
 float readChamberTemperature(void);
-void postdata(int voltage, int level);
+void postdata(float voltage, int level, int status, float acVoltage, float acCurrent, float kwh);
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 void setup() {  
   pinMode(START_BUTTON, INPUT);
@@ -102,6 +102,11 @@ void setup() {
 }
  
 void loop() {
+lcd.setCursor(0,1);
+lcd.print("V:");
+lcd.print(voltage,1);
+lcd.print("   L:");
+lcd.print(level);
  
  if(blynkUseFlag == true){
  blynkBtn =getChargerStatus();
@@ -119,22 +124,22 @@ void loop() {
  readChamberTemperature();
  int inpuValue = analogRead(VADC);
 
- if(inpuValue > 373 & inpuValue < 501 ){
-    vMin = 40; vMax = 54;
-  voltage=map(inpuValue, 373, 501, vMin, vMax);
+ if(inpuValue >= 390 & inpuValue <= 503 ){
+    vMin = 42.0; vMax = 54.0;
+  voltage=mapf(inpuValue, 390, 503, vMin, vMax);
   }
 
- else if(inpuValue > 519 & inpuValue < 625 ){
-    vMin = 56; vMax = 67;
-  voltage=map(inpuValue, 519, 625, vMin, vMax);
+ else if(inpuValue > 525 & inpuValue < 625 ){
+    vMin = 56.0; vMax = 67.0;
+  voltage=mapf(inpuValue, 525, 625, vMin, vMax);
   }
 
-  else if(inpuValue > 640 & inpuValue < 785 ){
-    vMin = 69; vMax = 84;
-  voltage=map(inpuValue, 640, 785, vMin, vMax);
+  else if(inpuValue > 655 & inpuValue < 800 ){
+    vMin = 69.0; vMax = 84.0;
+  voltage=mapf(inpuValue, 640, 800, vMin, vMax);
   }
   
-  level=map(voltage, vMin, vMax, 0, 100);
+  level=mapf(voltage, vMin, vMax, 0, 100);
   if(level < 0)
   level = 0;
 
@@ -175,10 +180,14 @@ if(prevState != blynkBtn){
   }
 }
 if(blynkUseFlag == true){
-postdata(voltage,level);
+postdata(voltage,level,chargerState,emon1.Vrms,emon1.Irms,kWh);
 }
 }
 
+/*******************************************************************************************************************************************/
+float mapf(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 /*******************************************************************************************************************************************/
 int getChargerStatus(void){
  result = http.get(URL, response);
@@ -195,6 +204,7 @@ return switcher;
 /*------------------------------------------------------------------------------------------------------------------------------*/
 
 void chargerOff(void){
+  chargerState =false;
 digitalWrite(RELAY,LOW);
 Serial.println("off");
 lcd.setCursor(0,0);
@@ -206,6 +216,7 @@ lcd.print("CHARGER-OFF");
 /*---------------------------------------------------------------------------------------------------------------------------------*/
 
 void chargerOn(void){
+  chargerState =true;
 digitalWrite(RELAY,HIGH);
 Serial.println("on");
 lcd.setCursor(0,0);
@@ -286,9 +297,20 @@ float readChamberTemperature(void){
   return t;
 }
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------*/
-void postdata(int voltage, int level){
- sprintf(body, "{\"level\": %d, \"voltage\": %d }", level, voltage);
+void postdata(float voltage, int level, int status, float acVoltage, float acCurrent, float kwh){
+  char p[5];
+  dtostrf(voltage,4,1,p);
+  char acvol[5];
+  dtostrf(acVoltage,4,1,acvol);
+    char accurr[5];
+  dtostrf(acVoltage,4,1,accurr);
+    char ackwh[5];
+  dtostrf(acVoltage,4,1,ackwh);
+  if(status >= 1)
+    status=1;
+ sprintf(body, "{\"level\": %d, \"voltage\": %s, \"status\":%d }", level, p,status);
   result = http.post(URLP, body, response);
+  Serial.println(body);
   Serial.print(F("HTTP POST: "));
   Serial.println(result);
   if (result == SUCCESS)
